@@ -1,0 +1,18 @@
+# Virtual Environment
+dm_sender/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak
+venv.bak
+
+# Session file
+session.json
