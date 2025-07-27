@@ -4,6 +4,9 @@ dm_sender/
 #Mac
 .DS_Store
 
+#build
+build
+
 # Python cache
 __pycache__/
 *.pyc

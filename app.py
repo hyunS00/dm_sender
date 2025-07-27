@@ -16,19 +16,28 @@ if 'challenge_required' not in st.session_state: st.session_state.challenge_requ
 if 'challenge_code_sent' not in st.session_state: st.session_state.challenge_code_sent = False
 if 'login_info' not in st.session_state: st.session_state.login_info = {}
 
+if 'user_info' not in st.session_state: st.session_state.user_info = None
+
 # --- 자동 로그인 ---
 if st.session_state.client is None and not any([st.session_state.two_factor_required, st.session_state.challenge_required]):
     with st.spinner("저장된 세션 확인 중..."):
         client = load_session()
         if client:
-            st.session_state.client = client
-            st.success("✅ 저장된 세션으로 자동 로그인되었습니다!")
-            st.info(f"'{st.session_state.client.username}' 계정으로 로그인되었습니다.")
-            st.rerun()
+            try:
+                # 세션 유효성 검사 및 사용자 정보 가져오기
+                user_id = client.user_id
+                st.session_state.user_info = client.user_info(user_id)
+                st.session_state.client = client
+                st.success("✅ 저장된 세션으로 자동 로그인되었습니다!")
+            except Exception as e:
+                st.warning(f"세션이 만료되었거나 유효하지 않습니다. 다시 로그인해주세요. ({e})")
+                # 세션 파일 삭제
+                if os.path.exists(SESSION_FILE):
+                    os.remove(SESSION_FILE)
 
 # --- 1. 로그인 섹션 ---
 if st.session_state.client is None:
-    # (로그인 로직은 변경되지 않았으므로 생략)
+    # (2단계 인증 및 본인 확인 로직은 거의 동일)
     if st.session_state.two_factor_required:
         st.subheader("1a. 2단계 인증")
         st.info("인증 앱에 표시된 6자리 코드를 입력해주세요.")
@@ -37,42 +46,57 @@ if st.session_state.client is None:
             if verification_code:
                 client = st.session_state.login_info['client']
                 try:
-                    with st.spinner("인증 코드 확인 중..."): client.two_factor_login(verification_code)
+                    with st.spinner("인증 코드 확인 중..."):
+                        client.two_factor_login(verification_code)
                     st.session_state.client = client
+                    st.session_state.user_info = client.user_info(client.user_id) # 사용자 정보 가져오기
                     save_session(client)
-                    st.success("✅ 2단계 인증 성공!"); st.session_state.two_factor_required = False; st.rerun()
-                except Exception as e: st.error(f"인증 실패: {e}")
-            else: st.warning("인증 코드를 입력해주세요.")
+                    st.success("✅ 2단계 인증 성공!")
+                    st.session_state.two_factor_required = False
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"인증 실패: {e}")
+            else:
+                st.warning("인증 코드를 입력해주세요.")
     elif st.session_state.challenge_required:
         st.subheader("1b. 본인 확인 필요")
         client = st.session_state.login_info['client']
         if not st.session_state.challenge_code_sent:
             st.info("안전한 로그인을 위해 본인 확인이 필요합니다. 인증 코드를 받을 방법을 선택하세요.")
             choices = client.challenge_choices
-            if not choices: st.error("인증 방법을 가져올 수 없습니다.")
+            if not choices:
+                st.error("인증 방법을 가져올 수 없습니다.")
             else:
                 choice_labels = [c.label for c in choices]
                 chosen_label = st.radio("인증 방법 선택:", choice_labels)
                 if st.button("인증 코드 보내기"):
                     chosen_index = choice_labels.index(chosen_label)
                     try:
-                        with st.spinner("인증 코드를 보내는 중..."): client.challenge_select_verify_method(choices[chosen_index].value)
-                        st.session_state.challenge_code_sent = True; st.rerun()
-                    except Exception as e: st.error(f"코드 전송에 실패했습니다: {e}")
+                        with st.spinner("인증 코드를 보내는 중..."):
+                            client.challenge_select_verify_method(choices[chosen_index].value)
+                        st.session_state.challenge_code_sent = True
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"코드 전송에 실패했습니다: {e}")
         else:
             st.info("받으신 6자리 인증 코드를 입력해주세요.")
             challenge_code = st.text_input("인증 코드")
             if st.button("계정 인증"):
                 if challenge_code:
                     try:
-                        with st.spinner("계정 인증 중..."): client.challenge_code_verify(challenge_code)
+                        with st.spinner("계정 인증 중..."):
+                            client.challenge_code_verify(challenge_code)
                         st.session_state.client = client
+                        st.session_state.user_info = client.user_info(client.user_id) # 사용자 정보 가져오기
                         save_session(client)
                         st.success("✅ 본인 확인 성공!")
-                        st.session_state.challenge_required = False; st.session_state.challenge_code_sent = False
+                        st.session_state.challenge_required = False
+                        st.session_state.challenge_code_sent = False
                         st.rerun()
-                    except Exception as e: st.error(f"인증에 실패했습니다: {e}")
-                else: st.warning("인증 코드를 입력해주세요.")
+                    except Exception as e:
+                        st.error(f"인증에 실패했습니다: {e}")
+                else:
+                    st.warning("인증 코드를 입력해주세요.")
     else:
         st.subheader("1. Instagram 로그인")
         username = st.text_input("사용자 이름")
@@ -81,23 +105,46 @@ if st.session_state.client is None:
             if username and password:
                 client = Client()
                 try:
-                    with st.spinner("로그인 중..."): client.login(username, password)
-                    st.session_state.client = client; save_session(client); st.success("✅ 로그인 성공!"); st.rerun()
+                    with st.spinner("로그인 중..."):
+                        client.login(username, password)
+                    st.session_state.client = client
+                    st.session_state.user_info = client.user_info(client.user_id) # 사용자 정보 가져오기
+                    save_session(client)
+                    st.success("✅ 로그인 성공!")
+                    st.rerun()
                 except TwoFactorRequired:
-                    st.info("2단계 인증이 필요합니다."); st.session_state.two_factor_required = True
-                    st.session_state.login_info = {"client": client}; st.rerun()
+                    st.info("2단계 인증이 필요합니다.")
+                    st.session_state.two_factor_required = True
+                    st.session_state.login_info = {"client": client}
+                    st.rerun()
                 except ChallengeRequired:
-                    st.info("본인 확인이 필요합니다."); st.session_state.challenge_required = True
-                    st.session_state.login_info = {"client": client}; st.rerun()
-                except Exception as e: st.error(f"로그인 실패: {e}")
-            else: st.warning("사용자 이름과 비밀번호를 모두 입력해주세요.")
+                    st.info("본인 확인이 필요합니다.")
+                    st.session_state.challenge_required = True
+                    st.session_state.login_info = {"client": client}
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"로그인 실패: {e}")
+            else:
+                st.warning("사용자 이름과 비밀번호를 모두 입력해주세요.")
 
-# --- 2. DM 발송 및 설정 ---
-if st.session_state.client:
-    if st.button("로그아웃"):
-        if os.path.exists(SESSION_FILE): os.remove(SESSION_FILE)
-        for key in list(st.session_state.keys()): del st.session_state[key]
-        st.info("로그아웃되었습니다."); st.rerun()
+# --- 2. 사용자 정보 및 DM 발송 ---
+if st.session_state.client and st.session_state.user_info:
+    # --- 사용자 정보 표시 ---
+    st.subheader(f"👤 로그인 계정: {st.session_state.user_info.full_name}")
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        st.image(str(st.session_state.user_info.profile_pic_url), width=100)
+    with col2:
+        st.write(f"**사용자 이름:** {st.session_state.user_info.username}")
+        st.write(f"**팔로워:** {st.session_state.user_info.follower_count} | **팔로잉:** {st.session_state.user_info.following_count}")
+        if st.button("로그아웃"):
+            if os.path.exists(SESSION_FILE):
+                os.remove(SESSION_FILE)
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.info("로그아웃되었습니다.")
+            st.rerun()
+    st.divider()
 
     st.subheader("2. DM 내용 작성")
     recipients_str = st.text_area("수신자 사용자 이름 (한 줄에 한 명씩 입력)", height=150, placeholder="예시:\nuser1\nuser2\nuser3")
