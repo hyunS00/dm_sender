@@ -217,6 +217,9 @@ if st.session_state.client and st.session_state.user_info:
     with col2:
         max_delay = st.number_input("최대 간격", min_value=1, value=5, help="DM을 보낸 후 다음 DM을 보내기까지 대기할 최대 시간(초)입니다.")
 
+    st.divider()
+    follow_before_dm = st.checkbox("DM 발송 전 사용자 팔로우하기", value=True, help="체크하면 DM을 보내기 전에 해당 사용자를 먼저 팔로우합니다. 인스타그램의 정책에 따라 너무 많은 팔로우는 계정 제한을 유발할 수 있으니 주의하세요.")
+
     if st.button("🚀 DM 발송 시작"):
         messages = [msg.strip() for msg in [message1, message2, message3] if msg.strip()]
         num_messages = len(messages)
@@ -263,6 +266,16 @@ if st.session_state.client and st.session_state.user_info:
                     status_text.text(f"({i+1}/{total_recipients}) {recipient_username}에게 보내는 중...")
                     try:
                         user_id = st.session_state.client.user_id_from_username(recipient_username)
+
+                        # --- 팔로우 로직 ---
+                        if follow_before_dm:
+                            try:
+                                debug_container.write(f"-> `{recipient_username}` 팔로우 시도...")
+                                st.session_state.client.user_follow(user_id)
+                                debug_container.write(f"-> `{recipient_username}` 팔로우 성공.")
+                                time.sleep(random.uniform(1, 2)) # 팔로우 후 약간의 딜레이
+                            except Exception as e:
+                                debug_container.write(f"-> `{recipient_username}` 팔로우 실패: {e}")
                         
                         message_to_send = random.choice(messages) if messages else None
                         photo_to_send = random.choice(temp_photo_paths) if temp_photo_paths else None
