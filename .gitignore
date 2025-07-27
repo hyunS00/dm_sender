@@ -1,6 +1,9 @@
 # Virtual Environment
 dm_sender/
 
+#Mac
+.DS_Store
+
 # Python cache
 __pycache__/
 *.pyc

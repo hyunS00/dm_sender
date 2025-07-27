@@ -5,6 +5,7 @@ import time
 import os
 import random
 from session_manager import save_session, load_session, SESSION_FILE
+import uuid
 
 st.title("📸 Instagram DM Sender")
 
@@ -100,8 +101,13 @@ if st.session_state.client:
 
     st.subheader("2. DM 내용 작성")
     recipients_str = st.text_area("수신자 사용자 이름 (한 줄에 한 명씩 입력)", height=150, placeholder="예시:\nuser1\nuser2\nuser3")
-    message = st.text_area("보낼 메시지 (선택 사항)", height=100)
-    uploaded_file = st.file_uploader("이미지 첨부 (선택 사항)", type=["jpg", "jpeg", "png"])
+    
+    st.write("아래 3개의 메시지 중 하나가 각 수신자에게 랜덤으로 발송됩니다. 비워진 메시지 칸은 무시됩니다.")
+    message1 = st.text_area("메시지 1", height=80)
+    message2 = st.text_area("메시지 2", height=80)
+    message3 = st.text_area("메시지 3", height=80)
+
+    uploaded_files = st.file_uploader("이미지 첨부 (선택 사항, 여러 개 가능)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
     st.subheader("3. 발송 간격 설정 (초)")
     col1, col2 = st.columns(2)
@@ -111,9 +117,15 @@ if st.session_state.client:
         max_delay = st.number_input("최대 간격", min_value=1, value=5, help="DM을 보낸 후 다음 DM을 보내기까지 대기할 최대 시간(초)입니다.")
 
     if st.button("🚀 DM 발송 시작"):
+        messages = [msg.strip() for msg in [message1, message2, message3] if msg.strip()]
+        num_messages = len(messages)
+        num_images = len(uploaded_files) if uploaded_files else 0
+        
+        st.info(f"▶️ {num_messages}개의 메시지와 {num_images}개의 이미지를 랜덤으로 조합하여 발송합니다.")
+
         if max_delay < min_delay:
             st.warning("최대 간격은 최소 간격보다 크거나 같아야 합니다.")
-        elif not recipients_str or (not message and not uploaded_file):
+        elif not recipients_str or (not messages and not uploaded_files):
             st.warning("수신자 목록을 입력하고, 메시지나 이미지를 최소 한 개 이상 추가해주세요.")
         else:
             recipients = [name.strip() for name in recipients_str.split('\n') if name.strip()]
@@ -122,26 +134,53 @@ if st.session_state.client:
             progress_bar = st.progress(0)
             status_text = st.empty()
             
-            temp_photo_path = None
-            if uploaded_file:
-                temp_photo_path = f"temp_{uploaded_file.name}"
-                with open(temp_photo_path, "wb") as f: f.write(uploaded_file.getbuffer())
+            temp_photo_paths = []
+            if uploaded_files:
+                temp_dir = "temp_images"
+                if not os.path.exists(temp_dir):
+                    os.makedirs(temp_dir)
+                for uploaded_file in uploaded_files:
+                    ext = os.path.splitext(uploaded_file.name)[1]
+                    temp_photo_path = os.path.join(temp_dir, f"{uuid.uuid4()}{ext}")
+                    with open(temp_photo_path, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    temp_photo_paths.append(temp_photo_path)
+
+            # 디버깅을 위해 생성된 임시 이미지 파일 경로를 표시합니다.
+            if temp_photo_paths:
+                st.write("생성된 임시 이미지 파일:")
+                st.write(temp_photo_paths)
+
+            # 매번 다른 랜덤 결과를 얻기 위해 시드를 초기화합니다.
+            random.seed()
 
             with st.spinner(f"총 {total_recipients}명에게 메시지를 보냅니다..."):
+                debug_container = st.container()
+                debug_container.write("--- 발송 로그 ---")
+
                 for i, recipient_username in enumerate(recipients):
                     status_text.text(f"({i+1}/{total_recipients}) {recipient_username}에게 보내는 중...")
                     try:
                         user_id = st.session_state.client.user_id_from_username(recipient_username)
                         
-                        if temp_photo_path:
-                            st.session_state.client.direct_send_photo(user_ids=[user_id], path=temp_photo_path)
-                            if message: time.sleep(random.uniform(1, 3)) # 이미지와 텍스트 사이 짧은 딜레이
-                        if message:
-                            st.session_state.client.direct_send(message, user_ids=[user_id])
+                        message_to_send = random.choice(messages) if messages else None
+                        photo_to_send = random.choice(temp_photo_paths) if temp_photo_paths else None
+
+                        # 디버깅을 위해 선택된 메시지와 이미지를 표시합니다.
+                        msg_idx_str = f"메시지 {messages.index(message_to_send) + 1}" if message_to_send else "없음"
+                        img_name_str = f"이미지: {os.path.basename(photo_to_send)}" if photo_to_send else "없음"
+                        debug_container.write(f"-> `{recipient_username}`: {msg_idx_str}, {img_name_str}")
+
+                        if photo_to_send:
+                            st.session_state.client.direct_send_photo(user_ids=[user_id], path=photo_to_send)
+                            if message_to_send:
+                                time.sleep(random.uniform(1, 3))
+                        
+                        if message_to_send:
+                            st.session_state.client.direct_send(message_to_send, user_ids=[user_id])
                         
                         success_list.append(recipient_username)
                         
-                        # 마지막 사용자가 아니면 랜덤 딜레이 적용
                         if i < total_recipients - 1:
                             delay = random.randint(min_delay, max_delay)
                             status_text.text(f"✅ {recipient_username}에게 전송 완료. 다음까지 {delay}초 대기...")
@@ -157,7 +196,13 @@ if st.session_state.client:
                     
                     progress_bar.progress((i + 1) / total_recipients)
 
-            if temp_photo_path and os.path.exists(temp_photo_path): os.remove(temp_photo_path)
+            # 임시 이미지 파일 및 디렉토리 삭제
+            if temp_photo_paths:
+                for path in temp_photo_paths:
+                    if os.path.exists(path):
+                        os.remove(path)
+                if os.path.exists("temp_images"):
+                    os.rmdir("temp_images")
 
             status_text.text("발송 완료!")
             st.success("🎉 DM 발송 작업이 모두 완료되었습니다!")
